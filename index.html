@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>Dynamic Harmonic Theremin</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/hand-pose-detection"></script>
+</head>
+<body>
+    <script>
+        let video;
+        let detector;
+        let oscs = [];
+        let isStarted = false;
+        let scale = [261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88]; // Cメジャースケール
+        let targetFreqs = [];
+        let currentFreqs = [];
+        let movementSpeed = 0;
+        let prevX = 0, prevY = 0;
+        let reverb, delay;
+        let randomChordChangeTime = 0;
+
+        async function setup() {
+            createCanvas(640, 480);
+            video = createCapture(VIDEO);
+            video.size(640, 480);
+            video.hide();
+
+            for (let i = 0; i < 5; i++) {
+                let osc = new p5.Oscillator('sine');
+                osc.disconnect();
+                oscs.push(osc);
+                currentFreqs.push(261.63);
+                targetFreqs.push(261.63);
+            }
+
+            reverb = new p5.Reverb();
+            delay = new p5.Delay();
+
+            await initHandPoseDetection();
+            randomChordChangeTime = millis();
+        }
+
+        async function initHandPoseDetection() {
+            detector = await handPoseDetection.createDetector(
+                handPoseDetection.SupportedModels.MediaPipeHands,
+                {
+                    runtime: 'tfjs',
+                    modelType: 'full',
+                    maxHands: 1
+                }
+            );
+        }
+
+        async function detectHands() {
+            const hands = await detector.estimateHands(video.elt);
+            if (hands.length > 0) {
+                let hand = hands[0];
+                let currentX = hand.keypoints[0].x;
+                let currentY = hand.keypoints[0].y;
+
+                // 動きの速さを計算
+                movementSpeed = dist(currentX, currentY, prevX, prevY);
+                prevX = currentX;
+                prevY = currentY;
+
+                let noteCount = constrain(map(movementSpeed, 0, 50, 1, 5), 1, 5);
+                let index = floor(map(currentY, 1, 0, 0, scale.length));
+                index = constrain(index, 0, scale.length - 1);
+
+                for (let i = 0; i < noteCount; i++) {
+                    let harmonicIndex = (index + i * 2) % scale.length;
+                    targetFreqs[i] = scale[harmonicIndex];
+                }
+            }
+        }
+
+        function draw() {
+            background(0);
+            image(video, 0, 0, width, height);
+
+            if (!isStarted) {
+                fill(255, 0, 0);
+                textSize(20);
+                textAlign(CENTER, CENTER);
+                text("画面をクリックしてください", width / 2, height / 2);
+                return;
+            }
+
+            detectHands();
+
+            for (let i = 0; i < oscs.length; i++) {
+                currentFreqs[i] = lerp(currentFreqs[i], targetFreqs[i], 0.1);
+                oscs[i].freq(currentFreqs[i]);
+                oscs[i].amp(0.3 / (i + 1));
+            }
+
+            // 20秒ごとにランダムなコード変化
+            if (millis() - randomChordChangeTime > 20000) {
+                for (let i = 0; i < oscs.length; i++) {
+                    targetFreqs[i] = scale[floor(random(0, scale.length))];
+                }
+                randomChordChangeTime = millis();
+            }
+
+            fill(255);
+            textSize(24);
+            text(`Harmonic Notes: ${currentFreqs.map(f => Math.round(f)).join(", ")}`, 20, 30);
+        }
+
+        function mousePressed() {
+            if (!isStarted) {
+                userStartAudio();
+                for (let osc of oscs) {
+                    osc.start();
+                    reverb.process(osc, 3, 2);
+                    delay.process(osc, 0.5, 0.7, 2300);
+                }
+                isStarted = true;
+            }
+        }
+    </script>
+</body>
+</html>
