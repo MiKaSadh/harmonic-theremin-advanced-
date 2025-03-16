@@ -2,13 +2,19 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Dynamic Harmonic Theremin</title>
+    <title>Advanced Harmonic Theremin</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/addons/p5.sound.min.js"></script> 
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/hand-pose-detection"></script>
+    <style>
+        body { margin: 0; overflow: hidden; text-align: center; font-family: Arial, sans-serif; color: white; }
+        canvas { display: block; }
+        #info { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); font-size: 18px; }
+    </style>
 </head>
 <body>
+    <div id="info">🎵 Advanced Harmonic Theremin 🎵</div>
     <script>
         let video;
         let detector;
@@ -18,27 +24,29 @@
         let targetFreqs = [];
         let currentFreqs = [];
         let movementSpeed = 0;
-        let prevX = 0, prevY = 0;
-        let reverb, delay;
+        let prevX = 0, prevY = 0, prevZ = 0;
+        let reverb, delay, filter, distortion;
         let randomChordChangeTime = 0;
 
         async function setup() {
-            createCanvas(640, 480);
-
+            createCanvas(windowWidth, windowHeight);
+            
             video = createCapture(VIDEO);
-            video.size(640, 480);
+            video.size(windowWidth, windowHeight);
             video.hide();
 
             for (let i = 0; i < 5; i++) {
                 let osc = new p5.Oscillator('sine');
                 osc.disconnect();
                 oscs.push(osc);
-                currentFreqs.push(261.63);
                 targetFreqs.push(261.63);
+                currentFreqs.push(261.63);
             }
 
             reverb = new p5.Reverb();
             delay = new p5.Delay();
+            filter = new p5.Filter('lowpass');
+            distortion = new p5.Distortion(0.1);
 
             await initHandPoseDetection();
             randomChordChangeTime = millis();
@@ -47,33 +55,43 @@
         async function initHandPoseDetection() {
             detector = await handPoseDetection.createDetector(
                 handPoseDetection.SupportedModels.MediaPipeHands,
-                {
-                    runtime: 'tfjs',
-                    modelType: 'full',
-                    maxHands: 1
-                }
+                { runtime: 'tfjs', modelType: 'full', maxHands: 2 }
             );
         }
 
         async function detectHands() {
             const hands = await detector.estimateHands(video.elt);
-            if (hands.length > 0) {
-                let hand = hands[0];
-                let currentX = hand.keypoints[0].x;
-                let currentY = hand.keypoints[0].y;
+            let rightHand = hands.find(h => h.handedness === 'Right');
+            let leftHand = hands.find(h => h.handedness === 'Left');
 
-                movementSpeed = dist(currentX, currentY, prevX, prevY);
-                prevX = currentX;
-                prevY = currentY;
+            if (rightHand) {
+                let x = rightHand.keypoints[0].x;
+                let y = rightHand.keypoints[0].y;
+                let z = rightHand.keypoints[0].z;
 
-                let noteCount = constrain(map(movementSpeed, 0, 50, 1, 5), 1, 5);
-                let index = floor(map(currentY, 1, 0, 0, scale.length));
-                index = constrain(index, 0, scale.length - 1);
+                let freqIndex = floor(map(y, 1, height, 0, scale.length));
+                targetFreqs[0] = scale[constrain(freqIndex, 0, scale.length - 1)];
 
-                for (let i = 0; i < noteCount; i++) {
-                    let harmonicIndex = (index + i * 2) % scale.length;
-                    targetFreqs[i] = scale[harmonicIndex];
-                }
+                let pan = map(x, 0, width, -1, 1);
+                for (let osc of oscs) osc.pan(pan);
+
+                let waveform = (z < -30) ? 'sawtooth' : 'sine';
+                for (let osc of oscs) osc.setType(waveform);
+            }
+
+            if (leftHand) {
+                let x = leftHand.keypoints[0].x;
+                let y = leftHand.keypoints[0].y;
+                let z = leftHand.keypoints[0].z;
+
+                let delayTime = map(x, 0, width, 0, 0.5);
+                delay.delayTime(delayTime);
+
+                let filterFreq = map(y, 0, height, 100, 2000);
+                filter.freq(filterFreq);
+
+                let distortionAmount = map(z, -50, 50, 0, 0.5);
+                distortion.amount(constrain(distortionAmount, 0, 1));
             }
         }
 
@@ -83,7 +101,7 @@
 
             if (!isStarted) {
                 fill(255, 0, 0);
-                textSize(20);
+                textSize(32);
                 textAlign(CENTER, CENTER);
                 text("画面をクリックしてください", width / 2, height / 2);
                 return;
@@ -103,19 +121,17 @@
                 }
                 randomChordChangeTime = millis();
             }
-
-            fill(255);
-            textSize(24);
-            text(`Harmonic Notes: ${currentFreqs.map(f => Math.round(f)).join(", ")}`, 20, 30);
         }
 
         function mousePressed() {
             if (!isStarted) {
-                userStartAudio(); // p5.sound.js を追加したので、これで正しく動作するはず！
+                userStartAudio();
                 for (let osc of oscs) {
                     osc.start();
-                    reverb.process(osc, 3, 2);
-                    delay.process(osc, 0.5, 0.7, 2300);
+                    osc.connect(filter);
+                    filter.connect(delay);
+                    delay.connect(reverb);
+                    reverb.connect(distortion);
                 }
                 isStarted = true;
             }
