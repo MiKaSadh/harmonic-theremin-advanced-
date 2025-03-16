@@ -7,6 +7,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/addons/p5.sound.min.js"></script> 
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/hand-pose-detection"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/facemesh"></script> 
     <style>
         body { margin: 0; overflow: hidden; text-align: center; font-family: Arial, sans-serif; color: white; }
         canvas { display: block; }
@@ -17,16 +18,17 @@
     <div id="info">🎵 Advanced Harmonic Theremin 🎵</div>
     <script>
         let video;
-        let detector;
+        let handDetector, faceDetector;
         let oscs = [];
         let isStarted = false;
-        let scale = [261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88]; // Cメジャースケール
+        let scale = [130.81, 146.83, 164.81, 174.61, 196.00, 220.00, 246.94, 261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88]; 
         let targetFreqs = [];
         let currentFreqs = [];
         let movementSpeed = 0;
         let prevX = 0, prevY = 0, prevZ = 0;
         let reverb, delay, filter, distortion;
         let randomChordChangeTime = 0;
+        let faceX = 0, faceY = 0, faceZ = 0;
 
         async function setup() {
             createCanvas(windowWidth, windowHeight);
@@ -46,21 +48,27 @@
             reverb = new p5.Reverb();
             delay = new p5.Delay();
             filter = new p5.Filter('lowpass');
-            distortion = new p5.Distortion(0.1);
+            distortion = new p5.Distortion(0.03);
 
             await initHandPoseDetection();
+            await initFaceMeshDetection();
+
             randomChordChangeTime = millis();
         }
 
         async function initHandPoseDetection() {
-            detector = await handPoseDetection.createDetector(
+            handDetector = await handPoseDetection.createDetector(
                 handPoseDetection.SupportedModels.MediaPipeHands,
                 { runtime: 'tfjs', modelType: 'full', maxHands: 2 }
             );
         }
 
-        async function detectHands() {
-            const hands = await detector.estimateHands(video.elt);
+        async function initFaceMeshDetection() {
+            faceDetector = await facemesh.load();
+        }
+
+        async function detectHandsAndFace() {
+            const hands = await handDetector.estimateHands(video.elt);
             let rightHand = hands.find(h => h.handedness === 'Right');
             let leftHand = hands.find(h => h.handedness === 'Left');
 
@@ -69,13 +77,13 @@
                 let y = rightHand.keypoints[0].y;
                 let z = rightHand.keypoints[0].z;
 
-                let freqIndex = floor(map(y, 1, height, 0, scale.length));
+                let freqIndex = floor(map(y, 1, height, 0, scale.length * 1.5)); 
                 targetFreqs[0] = scale[constrain(freqIndex, 0, scale.length - 1)];
 
-                let pan = map(x, 0, width, -1, 1);
-                for (let osc of oscs) osc.pan(pan);
+                let pan = map(x, 0, width, -1.5, 1.5);
+                for (let osc of oscs) osc.pan(constrain(pan, -1, 1));
 
-                let waveform = (z < -30) ? 'sawtooth' : 'sine';
+                let waveform = (z < -20) ? 'sawtooth' : 'sine';
                 for (let osc of oscs) osc.setType(waveform);
             }
 
@@ -84,14 +92,31 @@
                 let y = leftHand.keypoints[0].y;
                 let z = leftHand.keypoints[0].z;
 
-                let delayTime = map(x, 0, width, 0, 0.5);
-                delay.delayTime(delayTime);
+                let delayTime = map(x, 0, width, 0, 0.8);
+                delay.delayTime(constrain(delayTime, 0, 0.7));
 
-                let filterFreq = map(y, 0, height, 100, 2000);
-                filter.freq(filterFreq);
+                let filterFreq = map(y, 0, height, 50, 5000);
+                filter.freq(constrain(filterFreq, 50, 5000));
 
-                let distortionAmount = map(z, -50, 50, 0, 0.5);
-                distortion.amount(constrain(distortionAmount, 0, 1));
+                let distortionAmount = map(z, -50, 50, 0, 0.03); 
+                distortion.amount(constrain(distortionAmount, 0, 0.03));
+            }
+
+            const facePredictions = await faceDetector.estimateFaces(video.elt);
+            if (facePredictions.length > 0) {
+                let face = facePredictions[0].annotations;
+                faceX = face.midwayBetweenEyes[0][0];
+                faceY = face.midwayBetweenEyes[0][1];
+                faceZ = face.midwayBetweenEyes[0][2];
+
+                let chordChange = map(faceX, 0, width, 0, scale.length);
+                targetFreqs[1] = scale[floor(chordChange)];
+
+                let reverbAmount = map(faceY, 0, height, 0, 5);
+                reverb.drywet(constrain(reverbAmount, 0, 1));
+
+                let volume = map(faceZ, -50, 50, 0.2, 1);
+                for (let osc of oscs) osc.amp(constrain(volume, 0.2, 1));
             }
         }
 
@@ -107,19 +132,11 @@
                 return;
             }
 
-            detectHands();
+            detectHandsAndFace();
 
             for (let i = 0; i < oscs.length; i++) {
                 currentFreqs[i] = lerp(currentFreqs[i], targetFreqs[i], 0.1);
                 oscs[i].freq(currentFreqs[i]);
-                oscs[i].amp(0.3 / (i + 1));
-            }
-
-            if (millis() - randomChordChangeTime > 20000) {
-                for (let i = 0; i < oscs.length; i++) {
-                    targetFreqs[i] = scale[floor(random(0, scale.length))];
-                }
-                randomChordChangeTime = millis();
             }
         }
 
