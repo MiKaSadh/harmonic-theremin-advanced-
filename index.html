@@ -2,12 +2,11 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Advanced Harmonic Theremin</title>
+    <title>Harmonic Theremin with Gesture Control</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/addons/p5.sound.min.js"></script> 
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/hand-pose-detection"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/facemesh"></script> 
     <style>
         body { margin: 0; overflow: hidden; text-align: center; font-family: Arial, sans-serif; color: white; }
         canvas { display: block; }
@@ -15,20 +14,19 @@
     </style>
 </head>
 <body>
-    <div id="info">🎵 Advanced Harmonic Theremin 🎵</div>
+    <div id="info">🎵 Harmonic Theremin 🎵</div>
     <script>
         let video;
-        let handDetector, faceDetector;
+        let detector;
         let oscs = [];
+        let bassOsc, noise;
         let isStarted = false;
-        let scale = [130.81, 146.83, 164.81, 174.61, 196.00, 220.00, 246.94, 261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88]; 
+        let scale = [130.81, 146.83, 164.81, 174.61, 196.00, 220.00, 246.94, 261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88];
         let targetFreqs = [];
         let currentFreqs = [];
-        let movementSpeed = 0;
-        let prevX = 0, prevY = 0, prevZ = 0;
+        let noiseOn = false;
         let reverb, delay, filter, distortion;
         let randomChordChangeTime = 0;
-        let faceX = 0, faceY = 0, faceZ = 0;
 
         async function setup() {
             createCanvas(windowWidth, windowHeight);
@@ -36,6 +34,8 @@
             video = createCapture(VIDEO);
             video.size(windowWidth, windowHeight);
             video.hide();
+
+            fft = new p5.FFT();
 
             for (let i = 0; i < 5; i++) {
                 let osc = new p5.Oscillator('sine');
@@ -45,39 +45,42 @@
                 currentFreqs.push(261.63);
             }
 
+            bassOsc = new p5.Oscillator('sine');
+            bassOsc.disconnect();
+            bassOsc.freq(130.81); // 初期値は低音C
+
+            noise = new p5.Noise('white');
+            noise.disconnect();
+
             reverb = new p5.Reverb();
             delay = new p5.Delay();
             filter = new p5.Filter('lowpass');
             distortion = new p5.Distortion(0.03);
 
             await initHandPoseDetection();
-            await initFaceMeshDetection();
 
             randomChordChangeTime = millis();
         }
 
         async function initHandPoseDetection() {
-            handDetector = await handPoseDetection.createDetector(
+            detector = await handPoseDetection.createDetector(
                 handPoseDetection.SupportedModels.MediaPipeHands,
                 { runtime: 'tfjs', modelType: 'full', maxHands: 2 }
             );
         }
 
-        async function initFaceMeshDetection() {
-            faceDetector = await facemesh.load();
-        }
-
-        async function detectHandsAndFace() {
-            const hands = await handDetector.estimateHands(video.elt);
+        async function detectHands() {
+            const hands = await detector.estimateHands(video.elt);
             let rightHand = hands.find(h => h.handedness === 'Right');
             let leftHand = hands.find(h => h.handedness === 'Left');
 
             if (rightHand) {
+                let fingers = rightHand.keypoints.length;
                 let x = rightHand.keypoints[0].x;
                 let y = rightHand.keypoints[0].y;
                 let z = rightHand.keypoints[0].z;
 
-                let freqIndex = floor(map(y, 1, height, 0, scale.length * 1.5)); 
+                let freqIndex = floor(map(y, 1, height, 0, scale.length * 1.5));
                 targetFreqs[0] = scale[constrain(freqIndex, 0, scale.length - 1)];
 
                 let pan = map(x, 0, width, -1.5, 1.5);
@@ -85,9 +88,19 @@
 
                 let waveform = (z < -20) ? 'sawtooth' : 'sine';
                 for (let osc of oscs) osc.setType(waveform);
+
+                // 🎯 右手のピースサインでベース音を鳴らす
+                if (fingers === 2) {
+                    bassOsc.freq(targetFreqs[0] / 2);
+                    bassOsc.amp(0.5, 0.1);
+                    bassOsc.start();
+                } else {
+                    bassOsc.amp(0, 0.1);
+                }
             }
 
             if (leftHand) {
+                let fingers = leftHand.keypoints.length;
                 let x = leftHand.keypoints[0].x;
                 let y = leftHand.keypoints[0].y;
                 let z = leftHand.keypoints[0].z;
@@ -98,25 +111,22 @@
                 let filterFreq = map(y, 0, height, 50, 5000);
                 filter.freq(constrain(filterFreq, 50, 5000));
 
-                let distortionAmount = map(z, -50, 50, 0, 0.03); 
+                let distortionAmount = map(z, -50, 50, 0, 0.03);
                 distortion.amount(constrain(distortionAmount, 0, 0.03));
-            }
 
-            const facePredictions = await faceDetector.estimateFaces(video.elt);
-            if (facePredictions.length > 0) {
-                let face = facePredictions[0].annotations;
-                faceX = face.midwayBetweenEyes[0][0];
-                faceY = face.midwayBetweenEyes[0][1];
-                faceZ = face.midwayBetweenEyes[0][2];
-
-                let chordChange = map(faceX, 0, width, 0, scale.length);
-                targetFreqs[1] = scale[floor(chordChange)];
-
-                let reverbAmount = map(faceY, 0, height, 0, 5);
-                reverb.drywet(constrain(reverbAmount, 0, 1));
-
-                let volume = map(faceZ, -50, 50, 0.2, 1);
-                for (let osc of oscs) osc.amp(constrain(volume, 0.2, 1));
+                // 🎯 左手のピースサインでノイズチョッパー発動
+                if (fingers === 2) {
+                    if (!noiseOn) {
+                        noise.start();
+                        noise.amp(0.3, 0.1);
+                        noiseOn = true;
+                    }
+                } else {
+                    if (noiseOn) {
+                        noise.amp(0, 0.1);
+                        noiseOn = false;
+                    }
+                }
             }
         }
 
@@ -132,7 +142,7 @@
                 return;
             }
 
-            detectHandsAndFace();
+            detectHands();
 
             for (let i = 0; i < oscs.length; i++) {
                 currentFreqs[i] = lerp(currentFreqs[i], targetFreqs[i], 0.1);
