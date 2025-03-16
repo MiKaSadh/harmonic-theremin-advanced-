@@ -22,8 +22,7 @@
         let randomChordChangeTime = 0;
 
         async function setup() {
-            let canvas = createCanvas(640, 480);
-            canvas.mousePressed(startSound); // クリックイベントを確実に取得
+            createCanvas(640, 480);
 
             video = createCapture(VIDEO);
             video.size(640, 480);
@@ -111,10 +110,9 @@
             text(`Harmonic Notes: ${currentFreqs.map(f => Math.round(f)).join(", ")}`, 20, 30);
         }
 
-        function startSound() {
-            console.log("クリックが検出されました！"); // デバッグ用ログ
+        function mousePressed() {
             if (!isStarted) {
-                userStartAudio(); // ← クリック後にオーディオを許可
+                userStartAudio(); // オーディオを確実に開始
                 for (let osc of oscs) {
                     osc.start();
                     reverb.process(osc, 3, 2);
