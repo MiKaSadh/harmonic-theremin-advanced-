@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <title>Dynamic Harmonic Theremin</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/addons/p5.sound.min.js"></script> 
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/hand-pose-detection"></script>
 </head>
@@ -61,7 +62,6 @@
                 let currentX = hand.keypoints[0].x;
                 let currentY = hand.keypoints[0].y;
 
-                // 動きの速さを計算
                 movementSpeed = dist(currentX, currentY, prevX, prevY);
                 prevX = currentX;
                 prevY = currentY;
@@ -97,7 +97,6 @@
                 oscs[i].amp(0.3 / (i + 1));
             }
 
-            // 20秒ごとにランダムなコード変化
             if (millis() - randomChordChangeTime > 20000) {
                 for (let i = 0; i < oscs.length; i++) {
                     targetFreqs[i] = scale[floor(random(0, scale.length))];
@@ -112,7 +111,7 @@
 
         function mousePressed() {
             if (!isStarted) {
-                userStartAudio(); // オーディオを確実に開始
+                userStartAudio(); // p5.sound.js を追加したので、これで正しく動作するはず！
                 for (let osc of oscs) {
                     osc.start();
                     reverb.process(osc, 3, 2);
